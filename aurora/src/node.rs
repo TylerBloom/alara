@@ -1,15 +1,20 @@
-use crate::{Client, InitRequest, Message, MessageId, RequestBody};
+use tokio::sync::mpsc::UnboundedSender;
+
+use crate::{Message, MessageBody, MessageId};
 
 pub trait Node: Sized {
-    type Body: RequestBody;
+    type Body: MessageBody;
 
-    fn init(msg: &Message<InitRequest>) -> Self;
+    fn init(
+        sender: UnboundedSender<Message<Self::Body>>,
+        node_id: String,
+        node_ids: Vec<String>,
+    ) -> Self;
 
     fn next_id(&mut self) -> MessageId;
 
     fn handle_msg(
         &mut self,
-        client: &mut Client<Self>,
         msg: Message<Self::Body>,
     ) -> anyhow::Result<Option<Message<Self::Body>>>;
 }
