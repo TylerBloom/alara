@@ -3,8 +3,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 #[tokio::main]
 async fn main() {
-    let (client, node): (_, EchoNode) = Client::new().await;
-    main_loop(client, node).await
+    main_loop::<EchoNode>().await
 }
 
 struct EchoNode {
@@ -29,7 +28,7 @@ impl Node for EchoNode {
     ) -> anyhow::Result<Option<Message<Self::Body>>> {
         match &msg.body {
             EchoBody::EchoOk { .. } => Ok(None),
-            EchoBody::Echo { id, echo } => {
+            EchoBody::Echo { msg_id: id, echo } => {
                 let echo = echo.clone();
                 let in_reply_to = *id;
                 let msg_id = self.next_id();

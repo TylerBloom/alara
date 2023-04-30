@@ -2,8 +2,7 @@ use aurora::*;
 
 #[tokio::main]
 async fn main() {
-    let (client, node): (_, IdsNode) = Client::new().await;
-    main_loop(client, node).await
+    main_loop::<IdsNode>().await
 }
 
 struct IdsNode {

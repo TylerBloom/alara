@@ -28,7 +28,7 @@ pub const KNOWN_ECHO_OK_BODY: &str =
 
 pub fn known_echo_body() -> EchoBody {
     EchoBody::Echo {
-        id: MessageId(1),
+        msg_id: MessageId(1),
         echo: String::from("Please echo 35"),
     }
 }

@@ -1,5 +1,3 @@
-use std::io::{self, StdoutLock, Write};
-
 use either::Either;
 use serde::Deserialize;
 use tokio::{
@@ -9,32 +7,60 @@ use tokio::{
 
 use crate::{InitBody, Message, MessageBody, Node};
 
-pub async fn main_loop<N: Node>(mut client: Client<N>, mut node: N) {
+/// The main loop for problem solutions to use. This handles creating the client and node, looping
+/// until the process is killed, and pulling, processing, and sending messages. Of course,
+/// solutions can implement whatever loop they want.
+pub async fn main_loop<N: Node>() {
+    let (mut client, mut node): (_, N) = Client::new().await;
     loop {
-        let msg = client.next_msg().await;
+        let msg = match client.recv.as_mut() {
+            None => read_msg(&mut client.stdin).await,
+            Some(recv) => {
+                tokio::select! {
+                    msg = read_msg(&mut client.stdin) => msg,
+                    msg = recv.recv() => {
+                        let msg = msg.expect("node hung up (likely crashed)");
+                        client.send_msg(msg);
+                        continue
+                    }
+                }
+            }
+        };
         let Ok(Some(msg)) = node.handle_msg(msg) else { continue };
         client.send_msg(msg);
     }
 }
 
+/// The main client used to receive new messages and send processed responses.
+/// Received messages can come from either stdin or from the sender half of the channel that the
+/// node receives upon construction.
+/// If the node does not use the sender, the receiver is never checked for messages.
+///
+/// NOTE: The node does *not* need to use the sender half of the channel. The channel is intended
+/// to messsages through the client asynchronously.
+#[derive(Debug)]
 pub struct Client<N: Node> {
     stdin: Lines<BufReader<Stdin>>,
     recv: Option<UnboundedReceiver<Message<N::Body>>>,
 }
 
-pub const INIT_ERR_MSG: &str = "init message not given";
-pub const STDIN_ERR_MSG: &str = "failed to read line from stdin";
-pub const STDOUT_ERR_MSG: &str = "failed to write line from stdin";
-pub const DE_ERR_MSG: &str = "failed to parse given message";
-pub const SER_ERR_MSG: &str = "failed to serialize given message";
+const INIT_ERR_MSG: &str = "init message not given";
+const STDIN_ERR_MSG: &str = "failed to read line from stdin";
+const DE_ERR_MSG: &str = "failed to parse given message";
+const SER_ERR_MSG: &str = "failed to serialize given message";
 
-#[derive(Deserialize)]
+/// The client can receive `Init` and `InitOk` messages in addition to messages with the node's
+/// expected data. To ensure that we don't ignore malformed messages, this type helps abstract over
+/// those possiblities.
+#[derive(Deserialize, Debug)]
 #[serde(transparent)]
 struct OrInit<B: MessageBody>(
-    #[serde(with = "either::serde_untagged")] pub Either<Message<B>, Message<InitBody>>,
+    #[serde(with = "either::serde_untagged")] Either<Message<B>, Message<InitBody>>,
 );
 
 impl<N: Node> Client<N> {
+    /// Creates a new client, waits to receive an `Init` message, constructs the node, and then
+    /// return both the client and node.
     pub async fn new() -> (Self, N) {
         let mut stdin = BufReader::new(tokio::io::stdin()).lines();
         let raw_init: String = stdin
@@ -45,7 +71,7 @@ impl<N: Node> Client<N> {
         let init: Message<InitBody> =
             serde_json::from_str(&raw_init).expect("failed to parse init message");
         let Message { src, dest, body } = init;
-        let InitBody::Init { id, node_id, node_ids } = body else {
+        let InitBody::Init { msg_id, node_id, node_ids } = body else {
             panic!("first message in stdout was not an init message")
         };
         let (send, mut recv) = mpsc::unbounded_channel();
@@ -54,16 +80,13 @@ impl<N: Node> Client<N> {
             Err(TryRecvError::Disconnected) => None,
             _ => panic!("No nodes types should be holding onto the sender yet"),
         };
-        let mut digest = Self {
-            stdin,
-            recv,
-        };
+        let mut digest = Self { stdin, recv };
         let resp = Message {
             src: dest,
             dest: src,
             body: InitBody::InitOk {
-                id: node.next_id(),
-                in_reply_to: id,
+                msg_id: node.next_id(),
+                in_reply_to: msg_id,
             },
         };
         //println!("Sending InitOk message...");
@@ -71,18 +94,14 @@ impl<N: Node> Client<N> {
         (digest, node)
     }
 
+    /// Waits for the next message to arrive over stdin.
+    ///
+    /// NOTE: This method does *not* check the channel. That logic is handled by the `main_loop`.
     pub async fn next_msg(&mut self) -> Message<N::Body> {
-        match self.recv.as_mut() {
-            None => read_msg(&mut self.stdin).await,
-            Some(recv) => {
-                tokio::select! {
-                    msg = read_msg(&mut self.stdin) => msg,
-                    msg = recv.recv() => msg.expect("node hung up (likely crashed)"),
-                }
-            }
-        }
+        read_msg(&mut self.stdin).await
     }
 
+    /// Sends a message over stdout.
     pub fn send_msg<B>(&mut self, msg: Message<B>)
     where
         B: MessageBody,
@@ -91,11 +110,14 @@ impl<N: Node> Client<N> {
     }
 }
 
+/// Reads messages from stdin. Messages can either be a `InitOk` message or a message of the
+/// specified type. `InitOk` messages are ignored and `Init` messages cause panics. Otherwise, the
+/// message is returned
 async fn read_msg<B: MessageBody>(stdin: &mut Lines<BufReader<Stdin>>) -> Message<B> {
     loop {
         match stdin.next_line().await {
             Err(err) => {
-                panic!("Error while reading line: {err}")
+                panic!("error while reading line: {err}")
             }
             Ok(None) => continue,
             Ok(Some(line)) => {
