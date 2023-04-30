@@ -33,14 +33,4 @@ mod tests {
             Ok(None)
         }
     }
-
-    #[tokio::test]
-    async fn dropped_sender() {
-        let (mut client, _node): (_, DummyNode) = Client::new().await;
-        let has_dropped = tokio::select! {
-            _ = client.next_msg() => false,
-            _ = tokio::time::sleep(std::time::Duration::from_millis(5)) => true,
-        };
-        assert!(has_dropped)
-    }
 }

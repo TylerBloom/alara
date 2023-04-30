@@ -1,4 +1,3 @@
-use either::Either;
 use serde::Deserialize;
 use tokio::{
     io::{AsyncBufReadExt, BufReader, Lines, Stdin},
@@ -12,20 +11,30 @@ use crate::{InitBody, Message, MessageBody, Node};
 /// solutions can implement whatever loop they want.
 pub async fn main_loop<N: Node>() {
     let (mut client, mut node): (_, N) = Client::new().await;
+    let mut counter = 0;
     loop {
+        counter += 1;
+        if counter == 2 {
+            println!(r#"{{"src":"n0","dest":"n0","body":{{"type":"read_ok","messages":[]}}}}"#);
+            continue;
+        }
         let msg = match client.recv.as_mut() {
             None => read_msg(&mut client.stdin).await,
             Some(recv) => {
                 tokio::select! {
                     msg = read_msg(&mut client.stdin) => msg,
-                    msg = recv.recv() => {
-                        let msg = msg.expect("node hung up (likely crashed)");
-                        client.send_msg(msg);
-                        continue
+                    _msg = recv.recv() => {
+                        panic!("No message should be sent over channel yet...");
+                        //let msg = msg.expect("node hung up (likely crashed)");
+                        //client.send_msg(msg);
+                        //continue
                     }
                 }
             }
         };
+        if counter == 2 {
+            panic!("Waiting for a second message...");
+        }
         let Ok(Some(msg)) = node.handle_msg(msg) else { continue };
         client.send_msg(msg);
     }
@@ -52,11 +61,14 @@ const SER_ERR_MSG: &str = "failed to serialize given message";
 /// The client can receive `Init` and `InitOk` messages in addition to messages with the node's
 /// expected data. To ensure that we don't ignore malformed messages, this type helps abstract over
 /// those possiblities.
-#[derive(Deserialize, Debug)]
-#[serde(transparent)]
-struct OrInit<B: MessageBody>(
-    #[serde(with = "either::serde_untagged")] Either<Message<B>, Message<InitBody>>,
-);
+#[derive(Deserialize, Debug, PartialEq)]
+#[serde(untagged, bound = "B: MessageBody")]
+pub enum OrInit<B: MessageBody> {
+    /// The main type that the node is expecting
+    Main(Message<B>),
+    /// An `Init` or `InitOk` message
+    Init(Message<InitBody>),
+}
 
 impl<N: Node> Client<N> {
     /// Creates a new client, waits to receive an `Init` message, constructs the node, and then
@@ -76,10 +88,10 @@ impl<N: Node> Client<N> {
         };
         let (send, mut recv) = mpsc::unbounded_channel();
         let mut node = N::init(send, node_id, node_ids);
-        let recv = match recv.try_recv() {
-            Err(TryRecvError::Disconnected) => None,
-            _ => panic!("No nodes types should be holding onto the sender yet"),
-        };
+        let recv = recv
+            .try_recv()
+            .map_err(|err| (err == TryRecvError::Empty).then_some(recv))
+            .expect_err("nodes should not send messages during construction");
         let mut digest = Self { stdin, recv };
         let resp = Message {
             src: dest,
@@ -119,16 +131,19 @@ async fn read_msg<B: MessageBody>(stdin: &mut Lines<BufReader<Stdin>>) -> Messag
             Err(err) => {
                 panic!("error while reading line: {err}")
             }
-            Ok(None) => continue,
+            Ok(None) => {
+                panic!("read nothing from stdin");
+                //continue
+            }
             Ok(Some(line)) => {
-                let val: OrInit<B> = serde_json::from_str(&line).expect(DE_ERR_MSG);
-                match val.0 {
-                    Either::Left(msg) => return msg,
-                    Either::Right(Message {
+                let val: OrInit<B> = serde_json::from_str(&line).expect(&format!("{DE_ERR_MSG}: {line}"));
+                match val {
+                    OrInit::Main(msg) => return msg,
+                    OrInit::Init(Message {
                         body: InitBody::InitOk { .. },
                         ..
                     }) => continue,
-                    Either::Right(Message {
+                    OrInit::Init(Message {
                         body: InitBody::Init { .. },
                         ..
                     }) => panic!("mutliple init messages recieved"),
