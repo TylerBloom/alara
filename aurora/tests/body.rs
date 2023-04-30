@@ -2,7 +2,7 @@ pub mod utils;
 
 #[cfg(test)]
 mod tests {
-    use aurora::{InitBody, EchoBody, IdBody, BroadcastBody};
+    use aurora::{BroadcastBody, EchoBody, IdBody, InitBody};
     use serde::de::DeserializeOwned;
 
     use super::utils::*;

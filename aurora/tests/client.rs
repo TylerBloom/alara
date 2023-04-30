@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use aurora::{Message, MessageBody, MessageId, Node, Client};
+    use aurora::{Client, Message, MessageBody, MessageId, Node};
     use serde::{Deserialize, Serialize};
     use tokio::sync::mpsc::UnboundedSender;
 
@@ -14,11 +14,7 @@ mod tests {
     impl Node for DummyNode {
         type Body = DummyBody;
 
-        fn init(
-            _: UnboundedSender<Message<Self::Body>>,
-            _: String,
-            _: Vec<String>,
-        ) -> Self {
+        fn init(_: UnboundedSender<Message<Self::Body>>, _: String, _: Vec<String>) -> Self {
             Self
         }
 

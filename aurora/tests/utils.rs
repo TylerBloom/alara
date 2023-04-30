@@ -145,7 +145,6 @@ pub const KNOWN_READ_OK_MSG: &str = formatcp!("{RESPONSE_BASE}{KNOWN_READ_OK_BOD
 pub const KNOWN_TOPOLOGY_MSG: &str = formatcp!("{REQUEST_BASE}{KNOWN_TOPOLOGY_BODY}}}");
 pub const KNOWN_TOPOLOGY_OK_MSG: &str = formatcp!("{RESPONSE_BASE}{KNOWN_TOPOLOGY_OK_BODY}}}");
 
-
 pub fn known_request<B: MessageBody>(body: B) -> Message<B> {
     Message {
         src: String::from(CLIENT_ID),

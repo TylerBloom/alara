@@ -168,7 +168,7 @@ pub enum BroadcastBody {
         msg_id: MessageId,
         /// The id of the message that this is responding to
         in_reply_to: MessageId,
-    }
+    },
 }
 
 impl MessageBody for BroadcastBody {}

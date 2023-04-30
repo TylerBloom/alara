@@ -136,7 +136,8 @@ async fn read_msg<B: MessageBody>(stdin: &mut Lines<BufReader<Stdin>>) -> Messag
                 //continue
             }
             Ok(Some(line)) => {
-                let val: OrInit<B> = serde_json::from_str(&line).expect(&format!("{DE_ERR_MSG}: {line}"));
+                let val: OrInit<B> =
+                    serde_json::from_str(&line).expect(&format!("{DE_ERR_MSG}: {line}"));
                 match val {
                     OrInit::Main(msg) => return msg,
                     OrInit::Init(Message {

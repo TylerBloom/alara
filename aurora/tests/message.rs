@@ -2,7 +2,7 @@ pub mod utils;
 
 #[cfg(test)]
 mod tests {
-    use aurora::{BroadcastBody, EchoBody, InitBody, Message, OrInit, IdBody};
+    use aurora::{BroadcastBody, EchoBody, IdBody, InitBody, Message, OrInit};
 
     use super::utils::*;
 
