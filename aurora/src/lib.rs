@@ -14,7 +14,7 @@
 #![deny(
     dead_code,
     missing_docs,
-    unused,
+    //unused,
     rustdoc::broken_intra_doc_links,
     missing_debug_implementations,
     unreachable_pub,

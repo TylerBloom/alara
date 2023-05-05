@@ -11,31 +11,21 @@ use crate::{InitBody, Message, MessageBody, Node};
 /// solutions can implement whatever loop they want.
 pub async fn main_loop<N: Node>() {
     let (mut client, mut node): (_, N) = Client::new().await;
-    let mut counter = 0;
     loop {
-        counter += 1;
-        if counter == 2 {
-            println!(r#"{{"src":"n0","dest":"n0","body":{{"type":"read_ok","messages":[]}}}}"#);
-            continue;
-        }
         let msg = match client.recv.as_mut() {
             None => read_msg(&mut client.stdin).await,
             Some(recv) => {
                 tokio::select! {
-                    msg = read_msg(&mut client.stdin) => msg,
-                    _msg = recv.recv() => {
-                        panic!("No message should be sent over channel yet...");
-                        //let msg = msg.expect("node hung up (likely crashed)");
-                        //client.send_msg(msg);
-                        //continue
+                    msg = recv.recv() => {
+                        msg.expect("node hung up (likely crashed)")
+                    }
+                    msg = read_msg(&mut client.stdin) => {
+                        let Ok(Some(msg)) = node.handle_msg(msg) else { continue };
+                        msg
                     }
                 }
             }
         };
-        if counter == 2 {
-            panic!("Waiting for a second message...");
-        }
-        let Ok(Some(msg)) = node.handle_msg(msg) else { continue };
         client.send_msg(msg);
     }
 }
@@ -101,7 +91,6 @@ impl<N: Node> Client<N> {
                 in_reply_to: msg_id,
             },
         };
-        //println!("Sending InitOk message...");
         digest.send_msg(resp);
         (digest, node)
     }
@@ -118,6 +107,10 @@ impl<N: Node> Client<N> {
     where
         B: MessageBody,
     {
+        eprintln!(
+            "sending outbound JSON message: {:?}",
+            serde_json::to_string(&msg).expect(SER_ERR_MSG)
+        );
         println!("{}", serde_json::to_string(&msg).expect(SER_ERR_MSG));
     }
 }
@@ -133,13 +126,15 @@ async fn read_msg<B: MessageBody>(stdin: &mut Lines<BufReader<Stdin>>) -> Messag
             }
             Ok(None) => {
                 panic!("read nothing from stdin");
-                //continue
             }
             Ok(Some(line)) => {
                 let val: OrInit<B> =
                     serde_json::from_str(&line).expect(&format!("{DE_ERR_MSG}: {line}"));
                 match val {
-                    OrInit::Main(msg) => return msg,
+                    OrInit::Main(msg) => {
+                        eprintln!("received inbound message: {msg:?}");
+                        return msg;
+                    }
                     OrInit::Init(Message {
                         body: InitBody::InitOk { .. },
                         ..

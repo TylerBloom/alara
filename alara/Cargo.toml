@@ -12,3 +12,5 @@ aurora = { path = "../aurora" }
 # Crates.io Deps:
 anyhow = { version = "1.0" }
 tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0" }
+serde_json = { version = "1.0" }
