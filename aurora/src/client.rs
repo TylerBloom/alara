@@ -11,9 +11,13 @@ use crate::{InitBody, Message, MessageBody, Node};
 /// solutions can implement whatever loop they want.
 pub async fn main_loop<N: Node>() {
     let (mut client, mut node): (_, N) = Client::new().await;
+    let mut counter = 0;
     loop {
         let msg = match client.recv.as_mut() {
-            None => read_msg(&mut client.stdin).await,
+            None => {
+                counter += 1;
+                read_msg(&mut client.stdin).await
+            }
             Some(recv) => {
                 tokio::select! {
                     msg = recv.recv() => {
@@ -21,12 +25,16 @@ pub async fn main_loop<N: Node>() {
                     }
                     msg = read_msg(&mut client.stdin) => {
                         let Ok(Some(msg)) = node.handle_msg(msg) else { continue };
+                        counter += 1;
                         msg
                     }
                 }
             }
         };
         client.send_msg(msg);
+        if counter == 100 {
+            //panic!("inspection time");
+        }
     }
 }
 

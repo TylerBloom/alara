@@ -1,10 +1,14 @@
 #![allow(dead_code, unused)]
 #![allow(clippy::expect_fun_call)]
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{Duration, SystemTime},
+};
 
 use aurora::*;
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 #[tokio::main]
 async fn main() {
@@ -12,6 +16,7 @@ async fn main() {
 }
 
 const SENDER_UNWRAP: &str = "expected for sender over channel to succeed";
+static MESSAGE_ID_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Approach:
 /// This is taking an immediate-mode approach to gossiping. That is, as soon as a message is
@@ -31,6 +36,7 @@ struct BroadcastNode {
     sender: UnboundedSender<Message<BroadcastBody>>,
     // The ids of adjecents mapped to the messages we know they have
     adjecents: HashMap<String, Adjecent>,
+    tracker: UnboundedSender<TrackerAction>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -39,15 +45,16 @@ struct Adjecent {
     known: HashSet<usize>,
     // A map of the outbound messages for each adjecent node. Message values are moved to the inner
     // map to the main adjecents map when the appropriate `BroadcastOk` message is recieved.
-    //
-    // TODO: We need to track suspected dropped messages in such a way that we can automatically
-    // resend those messages *and* cancel resending specific messages.
     pending: HashMap<MessageId, usize>,
 }
 
 #[derive(Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-struct MessageIdCounter {
-    counter: usize,
+struct MessageIdCounter;
+
+#[derive(Debug, PartialEq, Eq)]
+enum TrackerAction {
+    Track(Message<BroadcastBody>),
+    Stop(MessageId),
 }
 
 impl Node for BroadcastNode {
@@ -59,12 +66,16 @@ impl Node for BroadcastNode {
         nodes: Vec<String>,
     ) -> Self {
         let adjecents = HashMap::with_capacity(nodes.len());
+        let tracker_sender = sender.clone();
+        let (tracker, recv) = unbounded_channel();
+        tokio::spawn(async move { tracker_loop(tracker_sender, recv).await });
         Self {
             id: node_id,
-            counter: MessageIdCounter { counter: 0 },
+            counter: MessageIdCounter,
             sender,
             messages: HashSet::new(),
             adjecents,
+            tracker,
         }
     }
 
@@ -110,18 +121,13 @@ impl Node for BroadcastNode {
                 let msg_id = *msg_id;
                 msg.into_response(|body| {
                     *body = BroadcastBody::ReadOk {
-                        msg_id: Some(self.next_id()),
-                        in_reply_to: Some(msg_id),
+                        msg_id: self.next_id(),
+                        in_reply_to: msg_id,
                         messages: self.messages.clone(),
                     }
                 });
                 Ok(Some(msg))
             }
-            BroadcastBody::ReadOk {
-                msg_id,
-                in_reply_to,
-                messages,
-            } => Ok(None),
             BroadcastBody::Topology { msg_id, topology } => {
                 let msg_id = *msg_id;
                 self.handle_topology(topology);
@@ -133,7 +139,7 @@ impl Node for BroadcastNode {
                 });
                 Ok(Some(msg))
             }
-            BroadcastBody::TopologyOk { .. } => Ok(None),
+            BroadcastBody::ReadOk { .. } | BroadcastBody::TopologyOk { .. } => Ok(None),
         }
     }
 }
@@ -164,6 +170,9 @@ impl BroadcastNode {
             })
             .for_each(|msg| {
                 let json = serde_json::to_string(&msg).unwrap();
+                self.tracker
+                    .send(TrackerAction::Track(msg.clone()))
+                    .unwrap();
                 eprintln!("forwarding broadcast message: {json}");
                 self.sender.send(msg).unwrap();
             })
@@ -171,6 +180,7 @@ impl BroadcastNode {
 
     /// Confirm the message has been propagated
     fn handle_broadcast_ok(&mut self, src: &String, msg_id: MessageId) {
+        self.tracker.send(TrackerAction::Stop(msg_id)).unwrap();
         if let Some(adj) = self.adjecents.get_mut(src) {
             adj.update_pending(msg_id);
         }
@@ -212,8 +222,74 @@ impl Adjecent {
 
 impl MessageIdCounter {
     fn next_id(&mut self) -> MessageId {
-        let id = self.counter;
-        self.counter += 1;
+        let id = MESSAGE_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         MessageId(id)
+    }
+}
+
+async fn tracker_loop(
+    send: UnboundedSender<Message<BroadcastBody>>,
+    mut recv: UnboundedReceiver<TrackerAction>,
+) {
+    fn handle_msg(
+        msg: TrackerAction,
+        cancellations: &mut HashSet<MessageId>,
+        trackers: &mut VecDeque<(Message<BroadcastBody>, SystemTime)>,
+    ) {
+        match msg {
+            TrackerAction::Track(msg) => match &msg.body {
+                BroadcastBody::Broadcast { .. } => {
+                    eprintln!("Tracking message: {msg:?}");
+                    trackers.push_back((msg, SystemTime::now()));
+                }
+                _ => {}
+            },
+            TrackerAction::Stop(id) => {
+                eprintln!("Cancelling tracking of message: {id:?}");
+                cancellations.insert(id);
+            }
+        }
+    }
+    let mut cancellations: HashSet<MessageId> = HashSet::new();
+    let mut trackers: VecDeque<(Message<BroadcastBody>, SystemTime)> = VecDeque::new();
+    let mut counter = MessageIdCounter;
+    loop {
+        match trackers.front_mut() {
+            None => {
+                handle_msg(
+                    recv.recv().await.unwrap(),
+                    &mut cancellations,
+                    &mut trackers,
+                );
+            }
+            Some((msg, timer)) => {
+                match &msg.body {
+                    BroadcastBody::Broadcast { msg_id, .. } => {
+                        if cancellations.remove(msg_id) {
+                            eprintln!("Cancellation found for {msg_id:?}");
+                            trackers.pop_front();
+                            continue;
+                        }
+                    }
+                    _ => panic!("Only broadcast messages should be tracked"),
+                }
+                let elapsed = timer.elapsed().unwrap().as_millis() as u64;
+                if elapsed >= 150 {
+                    eprintln!("Oldest message has been waiting for too long. Resending...");
+                    send.send(msg.clone_with_msg_id(counter.next_id()));
+                    *timer = SystemTime::now();
+                    trackers.rotate_left(1);
+                } else {
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(150 - elapsed)) => {
+                            eprintln!("Slept. Time to loop again.");
+                        }
+                        msg = recv.recv() => {
+                            handle_msg(msg.unwrap(), &mut cancellations, &mut trackers);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

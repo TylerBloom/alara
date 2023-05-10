@@ -87,7 +87,7 @@ pub fn known_read_body() -> BroadcastBody {
 
 pub fn known_read_ok_body() -> BroadcastBody {
     BroadcastBody::ReadOk {
-        msg_id: MessageId(2),
+        msg_id: Some(MessageId(2)),
         in_reply_to: MessageId(1),
         messages: [1, 8, 72, 25].into_iter().collect(),
     }

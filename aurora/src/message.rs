@@ -38,6 +38,13 @@ impl<B: MessageBody> Message<B> {
         std::mem::swap(&mut self.src, &mut self.dest);
         f(&mut self.body)
     }
+
+    /// Creates a copy of the message but uses a new message id in the body
+    pub fn clone_with_msg_id(&self, msg_id: MessageId) -> Self {
+        let mut digest = self.clone();
+        digest.body.update_msg_id(msg_id);
+        digest
+    }
 }
 
 impl From<usize> for MessageId {

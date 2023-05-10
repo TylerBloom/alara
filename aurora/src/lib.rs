@@ -38,7 +38,10 @@ pub use node::*;
 
 /// A super trait to create a shorthand for all the traits that a message body needs as they are
 /// used as bounds in lots of places.
-pub trait MessageBody: Serialize + DeserializeOwned + Debug + Clone + PartialEq + Eq {}
+pub trait MessageBody: Serialize + DeserializeOwned + Debug + Clone + PartialEq + Eq {
+    /// This method updates the message id of the body, if applicable
+    fn update_msg_id(&mut self, id: MessageId);
+}
 
 /* ------ Init ------ */
 
@@ -66,7 +69,14 @@ pub enum InitBody {
     },
 }
 
-impl MessageBody for InitBody {}
+impl MessageBody for InitBody {
+    fn update_msg_id(&mut self, id: MessageId) {
+        match self {
+            InitBody::Init { msg_id, .. } => *msg_id = Some(id),
+            InitBody::InitOk { msg_id, .. } => *msg_id = id,
+        }
+    }
+}
 
 /* ------ Echo ------ */
 
@@ -94,7 +104,13 @@ pub enum EchoBody {
     },
 }
 
-impl MessageBody for EchoBody {}
+impl MessageBody for EchoBody {
+    fn update_msg_id(&mut self, id: MessageId) {
+        match self {
+            EchoBody::Echo { msg_id, .. } | EchoBody::EchoOk { msg_id, .. } => *msg_id = id,
+        }
+    }
+}
 
 /* ------ Ids ------ */
 
@@ -113,7 +129,9 @@ pub enum IdBody {
     },
 }
 
-impl MessageBody for IdBody {}
+impl MessageBody for IdBody {
+    fn update_msg_id(&mut self, _: MessageId) {}
+}
 
 /* ------ Broadcast ------ */
 
@@ -147,9 +165,9 @@ pub enum BroadcastBody {
     #[serde(rename = "read_ok")]
     ReadOk {
         /// The message id
-        msg_id: Option<MessageId>,
+        msg_id: MessageId,
         /// The id of the message that this is responding to
-        in_reply_to: Option<MessageId>,
+        in_reply_to: MessageId,
         /// The broadcast messages read from the node
         messages: HashSet<usize>,
     },
@@ -171,4 +189,15 @@ pub enum BroadcastBody {
     },
 }
 
-impl MessageBody for BroadcastBody {}
+impl MessageBody for BroadcastBody {
+    fn update_msg_id(&mut self, id: MessageId) {
+        match self {
+            BroadcastBody::Broadcast { msg_id, .. }
+            | BroadcastBody::BroadcastOk { msg_id, .. }
+            | BroadcastBody::Read { msg_id }
+            | BroadcastBody::ReadOk { msg_id, .. }
+            | BroadcastBody::Topology { msg_id, .. }
+            | BroadcastBody::TopologyOk { msg_id, .. } => *msg_id = id,
+        }
+    }
+}
